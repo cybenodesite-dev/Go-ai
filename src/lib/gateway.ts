@@ -16,8 +16,27 @@ export function json(data: unknown, status = 200, extraHeaders: Record<string, s
 }
 
 /**
+ * Google's Generative Language API (Gemini) exposes its OpenAI-compatible
+ * surface only under /v1beta/openai/… — every other provider shape is wrong
+ * there (the native path /v1beta/chat/completions does not exist). Whatever
+ * variant the user pastes, we normalise it to the correct surface:
+ *   https://generativelanguage.googleapis.com            -> /v1beta/openai
+ *   https://generativelanguage.googleapis.com/v1beta     -> /v1beta/openai
+ *   https://generativelanguage.googleapis.com/v1beta/openai -> (unchanged)
+ */
+export function isGoogleBaseUrl(baseUrl: string): boolean {
+  return /generativelanguage\.googleapis\.com/i.test(baseUrl);
+}
+
+function normalizeGoogleBase(b: string): string {
+  const u = b.replace(/\/+$/, "").replace(/\/openai$/i, "");
+  return (/\/v\d+[a-z]*$/i.test(u) ? u : `${u}/v1beta`) + "/openai";
+}
+
+/**
  * Builds an upstream URL from the provider base URL.
  * - Auto-prepends https:// when the protocol is missing.
+ * - Google (Gemini) hosts are routed to their OpenAI-compatible surface.
  * - Appends /v1 only when `autoVersion` is on AND the URL does not already end
  *   with a version segment (/v1, /v1beta, /v2…). Some proxies (e.g. personal
  *   Cloudflare workers) add /v1 themselves — for those autoVersion is off.
@@ -25,6 +44,7 @@ export function json(data: unknown, status = 200, extraHeaders: Record<string, s
 export function upstreamUrl(baseUrl: string, path: string, autoVersion = true): string {
   let b = (baseUrl || "").trim().replace(/\/+$/, "");
   if (!/^https?:\/\//i.test(b)) b = `https://${b}`;
+  if (isGoogleBaseUrl(b)) return normalizeGoogleBase(b) + path;
   if (autoVersion && !/(\/v\d+(beta|preview)?)(\/)?$/i.test(b)) {
     b += "/v1";
   }
@@ -55,17 +75,31 @@ export function extractUpstreamMessage(text: string): string | null {
  * Detects a geo/IP block: the provider refuses to serve the region the SERVER
  * exits from. The key itself is fine — it works from the user's machine or
  * from a supported deployment region (e.g. Vercel US).
+ *
+ * Note: Google (Gemini) signals geo-blocks with HTTP 400 FAILED_PRECONDITION
+ * ("User location is not supported for the API use.") — not 403 — and OpenAI
+ * uses the code unsupported_country_region_territory, so the message is
+ * checked BEFORE the status code.
  */
 export function isGeoBlock(status: number, body: string): boolean {
+  const raw = (body || "").slice(0, 2000);
+  const msg = (extractUpstreamMessage(raw) || "").toLowerCase();
+  if (
+    /user location is not supported|location is not supported for the api use|unsupported_country_region_territory|territory not supported|not available in your (country|region)/.test(
+      msg
+    ) ||
+    /unsupported_country_region_territory/.test(raw) // OpenAI puts it in error.code, not message
+  ) {
+    return true;
+  }
   if (status !== 403 && status !== 451) return false;
-  const msg = (extractUpstreamMessage(body) || "").toLowerCase();
   if (/region|sanction|embargo|country|geo|jurisdiction|not available|blocked/.test(msg)) return true;
   if (msg === "forbidden" || msg === "") return true; // bare 403 = IP/WAF-level block
   return false;
 }
 
 export const GEO_BLOCK_HINT =
-  "المزود يحجب منطقة خروج السيرفر الحالية — المفتاح سليم لكن الطلبات مرفوضة من هذه المنطقة. الحل: انشر البوابة على Vercel بمنطقة مدعومة (مثل الولايات المتحدة)";
+  "المزود يحجب منطقة خروج السيرفر الحالية — المفتاح سليم لكنه يعمل من منطقة أخرى (لهذا يعمل عندك مباشرة). الحل: انشر البوابة على Vercel بمنطقة مدعومة (مثل الولايات المتحدة)";
 
 /**
  * Detects MODEL-scoped rejections: the upstream refuses THIS model, not the key

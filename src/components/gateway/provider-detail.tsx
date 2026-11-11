@@ -128,7 +128,13 @@ export function ProviderDetail({ providerId, onBack }: { providerId: string; onB
   const autoVersion = (p?.auto_version ?? 1) === 1;
   const modelsUrlPreview = useMemo(() => {
     if (!p) return "";
-    const b = p.base_url.trim().replace(/\/+$/, "");
+    let b = p.base_url.trim().replace(/\/+$/, "");
+    if (!/^https?:\/\//i.test(b)) b = `https://${b}`;
+    // Google (Gemini) is always normalised to its OpenAI-compatible surface
+    if (/generativelanguage\.googleapis\.com/i.test(b)) {
+      const u = b.replace(/\/openai$/i, "");
+      return (/\/v\d+[a-z]*$/i.test(u) ? u : `${u}/v1beta`) + "/openai/models";
+    }
     const hasVersion = /(\/v\d+(beta|preview)?)(\/)?$/i.test(b);
     return `${b}${!hasVersion && autoVersion ? "/v1" : ""}/models`;
   }, [p, autoVersion]);
