@@ -14,7 +14,7 @@ export const metadata: Metadata = {
   description:
     "أداة إدارة مزودين الذكاء الاصطناعي: مفاتيح API، جلب واختيار الموديلات، رابط بيز موحد مع تدوير تلقائي للمفاتيح وعدّاد استخدام.",
   icons: {
-    icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
+    icon: "https://ai-service-provider.vercel.app/logo.svg",
   },
 };
 
