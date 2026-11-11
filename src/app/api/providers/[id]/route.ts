@@ -21,6 +21,7 @@ export async function GET(_request: Request, ctx: Ctx) {
       name: String(r.name),
       base_url: String(r.base_url),
       enabled: Number(r.enabled),
+      auto_version: r.auto_version === undefined ? 1 : Number(r.auto_version),
       created_at: String(r.created_at),
     };
 
@@ -59,7 +60,7 @@ export async function GET(_request: Request, ctx: Ctx) {
   }
 }
 
-// PATCH /api/providers/[id] — { name?, base_url?, enabled? }
+// PATCH /api/providers/[id] — { name?, base_url?, enabled?, auto_version? }
 export async function PATCH(request: Request, ctx: Ctx) {
   try {
     const { id } = await ctx.params;
@@ -77,6 +78,14 @@ export async function PATCH(request: Request, ctx: Ctx) {
       body?.base_url !== undefined ? String(body.base_url).trim() : String(cur.rows[0].base_url);
     const enabled =
       body?.enabled !== undefined ? (body.enabled ? 1 : 0) : Number(cur.rows[0].enabled);
+    const auto_version =
+      body?.auto_version !== undefined
+        ? body.auto_version
+          ? 1
+          : 0
+        : cur.rows[0].auto_version === undefined
+          ? 1
+          : Number(cur.rows[0].auto_version);
 
     if (!name) return json({ error: "اسم المزود مطلوب" }, 400);
     if (!/^https?:\/\/.+/.test(base_url)) {
@@ -84,8 +93,8 @@ export async function PATCH(request: Request, ctx: Ctx) {
     }
 
     await client.execute({
-      sql: "UPDATE providers SET name = ?, base_url = ?, enabled = ? WHERE id = ?",
-      args: [name, base_url, enabled, id],
+      sql: "UPDATE providers SET name = ?, base_url = ?, enabled = ?, auto_version = ? WHERE id = ?",
+      args: [name, base_url, enabled, auto_version, id],
     });
     return json({ ok: true });
   } catch (err) {

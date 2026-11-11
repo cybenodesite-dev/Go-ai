@@ -3,6 +3,7 @@ export type Provider = {
   name: string;
   base_url: string;
   enabled: number;
+  auto_version: number;
   created_at: string;
   keys_count: number;
   active_keys: number;
@@ -11,6 +12,33 @@ export type Provider = {
   models_count: number;
   selected_models: number;
   total_usage: number;
+};
+
+export type ProviderTestResult = {
+  label: string;
+  status_before: string;
+  ok: boolean;
+  http_status: number | null;
+  reason: string;
+  geo: boolean;
+  reactivated: boolean;
+};
+
+export type ProviderTestResponse = {
+  ok: boolean;
+  models_url: string;
+  results: ProviderTestResult[];
+  chat: {
+    ok: boolean;
+    model: string;
+    http_status: number | null;
+    reason: string;
+    geo: boolean;
+    latency_ms: number;
+    tested: boolean;
+  } | null;
+  reactivated: number;
+  all_geo_blocked: boolean;
 };
 
 export type ApiKey = {

@@ -81,6 +81,13 @@ export function db(): Promise<Client> {
     readyPromise = (async () => {
       const client = getClient();
       await client.batch(SCHEMA_STATEMENTS, "write");
+      // Light migration: per-provider toggle for auto-appending /v1
+      // (off for proxies that add /v1 themselves, e.g. personal Cloudflare workers).
+      try {
+        await client.execute("ALTER TABLE providers ADD COLUMN auto_version INTEGER NOT NULL DEFAULT 1");
+      } catch {
+        /* column already exists */
+      }
       return client;
     })().catch((err) => {
       readyPromise = null;

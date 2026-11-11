@@ -14,6 +14,9 @@ import {
   XCircle,
   Globe,
   Layers,
+  PlugZap,
+  AlertTriangle,
+  CheckCircle2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -57,13 +60,14 @@ import {
 import { KeyStatusBadge, CopyButton, EmptyState, SectionCard } from "@/components/gateway/shared";
 import { api, toastError, maskKey, formatDateTime, formatNumber, copyText } from "@/lib/client-utils";
 import { useToast } from "@/hooks/use-toast";
-import type { ApiKey, ModelRow } from "@/lib/types";
+import type { ApiKey, ModelRow, ProviderTestResponse } from "@/lib/types";
 
 type ProviderData = {
   id: string;
   name: string;
   base_url: string;
   enabled: number;
+  auto_version: number;
   created_at: string;
 };
 
@@ -86,6 +90,12 @@ export function ProviderDetail({ providerId, onBack }: { providerId: string; onB
   const [manualModel, setManualModel] = useState("");
   const [deleteKeyTarget, setDeleteKeyTarget] = useState<ApiKey | null>(null);
   const [deleteModelTarget, setDeleteModelTarget] = useState<ModelRow | null>(null);
+
+  // connection test
+  const [testing, setTesting] = useState(false);
+  const [testOpen, setTestOpen] = useState(false);
+  const [testResult, setTestResult] = useState<ProviderTestResponse | null>(null);
+  const [togglingAutoV, setTogglingAutoV] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -115,6 +125,47 @@ export function ProviderDetail({ providerId, onBack }: { providerId: string; onB
   const activeKeys = detail?.keys.filter((k) => k.status === "active").length ?? 0;
   const selectedCount = detail?.models.filter((m) => m.selected === 1).length ?? 0;
   const maxUsage = Math.max(1, ...(detail?.keys.map((k) => k.usage_count) ?? [1]));
+  const autoVersion = (p?.auto_version ?? 1) === 1;
+  const modelsUrlPreview = useMemo(() => {
+    if (!p) return "";
+    const b = p.base_url.trim().replace(/\/+$/, "");
+    const hasVersion = /(\/v\d+(beta|preview)?)(\/)?$/i.test(b);
+    return `${b}${!hasVersion && autoVersion ? "/v1" : ""}/models`;
+  }, [p, autoVersion]);
+
+  async function toggleAutoVersion(on: boolean) {
+    if (!p || togglingAutoV) return;
+    setTogglingAutoV(true);
+    setDetail((d) => (d ? { ...d, provider: { ...d.provider, auto_version: on ? 1 : 0 } } : d));
+    try {
+      await api(`/api/providers/${p.id}`, { method: "PATCH", body: JSON.stringify({ auto_version: on }) });
+      toast({
+        title: on ? "سيتم إضافة /v1 تلقائيًا للمسار" : "لن يتم إضافة /v1 — مناسب للبروكسيات التي تضيفه بنفسها",
+      });
+    } catch (e) {
+      toastError(e);
+      await load();
+    } finally {
+      setTogglingAutoV(false);
+    }
+  }
+
+  async function runTest() {
+    if (!p || testing) return;
+    setTesting(true);
+    setTestResult(null);
+    setTestOpen(true);
+    try {
+      const res = await api<ProviderTestResponse>(`/api/providers/${p.id}/test`, { method: "POST" });
+      setTestResult(res);
+      await load();
+    } catch (e) {
+      toastError(e, "فشل اختبار الاتصال");
+      setTestOpen(false);
+    } finally {
+      setTesting(false);
+    }
+  }
 
   async function addKeys() {
     if (!p) return;
@@ -265,9 +316,34 @@ export function ProviderDetail({ providerId, onBack }: { providerId: string; onB
               <span className="code-inline text-xs text-muted-foreground">{p.base_url}</span>
               <CopyButton value={p.base_url} />
             </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <Switch
+                id="auto-version"
+                checked={autoVersion}
+                disabled={togglingAutoV}
+                onCheckedChange={(v) => toggleAutoVersion(v)}
+              />
+              <Label htmlFor="auto-version" className="cursor-pointer text-xs text-muted-foreground">
+                إضافة <span className="code-inline">/v1</span> تلقائيًا لمسار المزود
+              </Label>
+              <span className="code-inline rounded bg-stone-100 px-1.5 py-0.5 text-[11px] text-stone-500" dir="ltr">
+                {modelsUrlPreview}
+              </span>
+            </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5 border-stone-200 bg-white shadow-sm hover:bg-stone-50"
+            disabled={testing || detail.keys.length === 0}
+            onClick={runTest}
+            title={detail.keys.length === 0 ? "أضف مفتاحًا أولًا" : "يختبر كل مفتاح مع المزود فعليًا ويعيد تفعيل السليم منها"}
+          >
+            <PlugZap className={`h-4 w-4 ${testing ? "animate-pulse text-amber-500" : ""}`} />
+            {testing ? "جارٍ الاختبار…" : "تجربة الاتصال"}
+          </Button>
           <Badge variant="outline" className="border-stone-200 bg-stone-50 text-stone-600">
             {activeKeys} مفتاح نشط
           </Badge>
@@ -327,6 +403,11 @@ export function ProviderDetail({ providerId, onBack }: { providerId: string; onB
                     </td>
                     <td className="py-2.5 pe-3">
                       <KeyStatusBadge status={k.status} />
+                      {k.last_error && (
+                        <p className="mt-1 max-w-[230px] truncate text-[11px] leading-4 text-red-500" title={k.last_error}>
+                          {k.last_error}
+                        </p>
+                      )}
                     </td>
                     <td className="py-2.5 pe-3">
                       <div className="flex items-center gap-2">
@@ -548,6 +629,109 @@ export function ProviderDetail({ providerId, onBack }: { providerId: string; onB
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Connection test results */}
+      <Dialog open={testOpen} onOpenChange={setTestOpen}>
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <PlugZap className="h-5 w-5 text-amber-500" /> تجربة الاتصال — {p.name}
+            </DialogTitle>
+            <DialogDescription>
+              اختبار حقيقي لكل مفتاح مع المزود. المفاتيح التي تنجح يُعاد تفعيلها تلقائيًا.
+            </DialogDescription>
+          </DialogHeader>
+
+          {!testResult ? (
+            <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
+              <PlugZap className="h-4 w-4 animate-pulse" /> جارٍ اختبار المفاتيح مع المزود…
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {testResult.all_geo_blocked && (
+                <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>
+                    كل المفاتيح سليمة لكن المزود يحجب منطقة خروج السيرفر الحالية (حظر جغرافي). الطلبات ستظل تُرفض من
+                    هنا — انشر البوابة على Vercel في منطقة مدعومة (مثل الولايات المتحدة) وستعمل فورًا.
+                  </span>
+                </div>
+              )}
+
+              <div className="space-y-2">
+                {testResult.results.map((r, i) => (
+                  <div key={i} className="rounded-lg border border-stone-200 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        {r.ok ? (
+                          <CheckCircle2 className="h-4 w-4 text-teal-600" />
+                        ) : (
+                          <XCircle className="h-4 w-4 text-red-500" />
+                        )}
+                        <span className="text-sm font-bold">{r.label || "مفتاح"}</span>
+                        {r.status_before !== "active" && r.ok && r.reactivated && (
+                          <Badge variant="outline" className="border-teal-200 bg-teal-50 text-[10px] text-teal-700">
+                            أُعيد تفعيله تلقائيًا
+                          </Badge>
+                        )}
+                      </div>
+                      <span className="code-inline text-[11px] text-muted-foreground" dir="ltr">
+                        {r.http_status ? `HTTP ${r.http_status}` : "network"}
+                      </span>
+                    </div>
+                    <p className={`mt-1.5 text-xs leading-5 ${r.geo ? "text-amber-700" : r.ok ? "text-stone-500" : "text-red-600"}`}>
+                      {r.reason}
+                    </p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="rounded-lg border border-stone-200 bg-stone-50/60 p-3">
+                <p className="mb-1.5 text-xs font-bold text-stone-600">اختبار الطلب الفعلي (chat completion)</p>
+                {!testResult.chat ? (
+                  <p className="text-xs text-muted-foreground">
+                    لم يُختبر الطلب الفعلي — {testResult.results.every((r) => !r.ok) ? "لا يوجد مفتاح يعمل" : "لا يوجد موديل محدد لهذا المزود (اختر موديلًا أولًا)"}
+                  </p>
+                ) : (
+                  <div>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        {testResult.chat.ok ? (
+                          <CheckCircle2 className="h-4 w-4 text-teal-600" />
+                        ) : (
+                          <XCircle className="h-4 w-4 text-red-500" />
+                        )}
+                        <span className="code-inline text-xs font-bold">{testResult.chat.model}</span>
+                        <span className="text-[11px] text-muted-foreground">{testResult.chat.latency_ms}ms</span>
+                      </div>
+                      <span className="code-inline text-[11px] text-muted-foreground" dir="ltr">
+                        {testResult.chat.http_status ? `HTTP ${testResult.chat.http_status}` : "network"}
+                      </span>
+                    </div>
+                    <p className={`mt-1.5 text-xs leading-5 ${testResult.chat.geo ? "text-amber-700" : testResult.chat.ok ? "text-stone-500" : "text-red-600"}`}>
+                      {testResult.chat.reason}
+                    </p>
+                  </div>
+                )}
+                <p className="mt-2 border-t border-stone-200 pt-2 text-[11px] text-muted-foreground" dir="ltr">
+                  {testResult.models_url}
+                </p>
+              </div>
+
+              {testResult.reactivated > 0 && (
+                <p className="text-xs text-teal-700">تمت إعادة تفعيل {testResult.reactivated} مفتاح تلقائيًا.</p>
+              )}
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTestOpen(false)}>إغلاق</Button>
+            <Button className="bg-teal-600 text-white hover:bg-teal-700" disabled={testing} onClick={runTest}>
+              <RefreshCcw className="h-4 w-4" /> إعادة الاختبار
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

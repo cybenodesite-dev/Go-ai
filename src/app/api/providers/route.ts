@@ -24,6 +24,7 @@ export async function GET() {
       name: String(r.name),
       base_url: String(r.base_url),
       enabled: Number(r.enabled),
+      auto_version: r.auto_version === undefined ? 1 : Number(r.auto_version),
       created_at: String(r.created_at),
       keys_count: Number(r.keys_count),
       active_keys: Number(r.active_keys),
@@ -39,12 +40,13 @@ export async function GET() {
   }
 }
 
-// POST /api/providers — create provider { name, base_url }
+// POST /api/providers — create provider { name, base_url, auto_version? }
 export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}));
     const name = String(body?.name ?? "").trim();
     const base_url = String(body?.base_url ?? "").trim();
+    const auto_version = body?.auto_version === undefined ? 1 : body.auto_version ? 1 : 0;
     if (!name) return json({ error: "اسم المزود مطلوب" }, 400);
     if (!/^https?:\/\/.+/.test(base_url)) {
       return json({ error: "رابط البيز يجب أن يبدأ بـ http:// أو https://" }, 400);
@@ -52,10 +54,10 @@ export async function POST(request: Request) {
     const client = await db();
     const id = newId();
     await client.execute({
-      sql: "INSERT INTO providers (id, name, base_url, enabled) VALUES (?, ?, ?, 1)",
-      args: [id, name, base_url],
+      sql: "INSERT INTO providers (id, name, base_url, enabled, auto_version) VALUES (?, ?, ?, 1, ?)",
+      args: [id, name, base_url, auto_version],
     });
-    return json({ id, name, base_url, enabled: 1 }, 201);
+    return json({ id, name, base_url, enabled: 1, auto_version }, 201);
   } catch (err) {
     return json({ error: err instanceof Error ? err.message : "خطأ غير معروف" }, 500);
   }

@@ -1,5 +1,5 @@
 import { db, newId } from "@/lib/turso";
-import { upstreamUrl, json } from "@/lib/gateway";
+import { upstreamUrl, json, extractUpstreamMessage, isGeoBlock, GEO_BLOCK_HINT } from "@/lib/gateway";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +38,7 @@ export async function POST(_request: Request, ctx: Ctx) {
     if (!pRes.rows.length) return json({ error: "المزود غير موجود" }, 404);
     const provider = pRes.rows[0];
     const baseUrl = String(provider.base_url);
+    const autoVersion = provider.auto_version === undefined ? true : Number(provider.auto_version) === 1;
 
     const kRes = await client.execute({
       sql: "SELECT key_value FROM api_keys WHERE provider_id = ? AND status != 'disabled' ORDER BY usage_count ASC LIMIT 1",
@@ -48,7 +49,7 @@ export async function POST(_request: Request, ctx: Ctx) {
     }
     const apiKey = String(kRes.rows[0].key_value);
 
-    const url = upstreamUrl(baseUrl, "/models");
+    const url = upstreamUrl(baseUrl, "/models", autoVersion);
     let upstream: Response;
     try {
       upstream = await fetch(url, {
@@ -56,13 +57,20 @@ export async function POST(_request: Request, ctx: Ctx) {
         signal: AbortSignal.timeout(30000),
       });
     } catch {
-      return json({ error: `تعذر الاتصال بالمزود على ${url}` }, 502);
+      return json(
+        { error: `تعذر الاتصال بالمزود على ${url} — تأكد من الرابط ومن إعدادات «إضافة /v1 تلقائيًا»` },
+        502
+      );
     }
 
     if (!upstream.ok) {
-      const text = (await upstream.text().catch(() => "")).slice(0, 300);
+      const text = (await upstream.text().catch(() => "")).slice(0, 2000);
+      if (isGeoBlock(upstream.status, text)) {
+        return json({ error: `HTTP ${upstream.status} — ${GEO_BLOCK_HINT}` }, 502);
+      }
+      const reason = extractUpstreamMessage(text);
       return json(
-        { error: `المزود رد بالخطأ ${upstream.status}${text ? `: ${text}` : ""}` },
+        { error: `المزود رد بالخطأ ${upstream.status}${reason ? `: ${reason}` : ""}` },
         502
       );
     }
