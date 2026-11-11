@@ -39,6 +39,7 @@ export type ProviderTestResponse = {
   } | null;
   reactivated: number;
   all_geo_blocked: boolean;
+  auto_version_fixed: boolean | null;
 };
 
 export type ApiKey = {

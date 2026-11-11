@@ -1,5 +1,12 @@
 import { db, newId } from "@/lib/turso";
-import { upstreamUrl, json, extractUpstreamMessage, isGeoBlock, GEO_BLOCK_HINT } from "@/lib/gateway";
+import {
+  upstreamUrl,
+  json,
+  extractUpstreamMessage,
+  isGeoBlock,
+  GEO_BLOCK_HINT,
+  looksLikePathNotFound,
+} from "@/lib/gateway";
 
 export const dynamic = "force-dynamic";
 
@@ -51,11 +58,42 @@ export async function POST(_request: Request, ctx: Ctx) {
 
     const url = upstreamUrl(baseUrl, "/models", autoVersion);
     let upstream: Response;
+    let effectiveAuto = autoVersion;
+    let autoVersionFixed: boolean | null = null;
     try {
       upstream = await fetch(url, {
         headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
         signal: AbortSignal.timeout(30000),
       });
+
+      // Smart path detection: on a path-style 404, retry once with the opposite
+      // /v1 setting and remember what worked for this provider.
+      if (upstream.status === 404) {
+        const peek = await upstream.text().catch(() => "");
+        if (looksLikePathNotFound(404, peek)) {
+          try {
+            const alt = await fetch(upstreamUrl(baseUrl, "/models", !autoVersion), {
+              headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+              signal: AbortSignal.timeout(30000),
+            });
+            if (alt.ok) {
+              upstream = alt;
+              effectiveAuto = !autoVersion;
+              autoVersionFixed = effectiveAuto;
+              await client.execute({
+                sql: "UPDATE providers SET auto_version = ? WHERE id = ?",
+                args: [effectiveAuto ? 1 : 0, id],
+              });
+            } else {
+              upstream = new Response(peek, { status: 404, headers: { "content-type": "application/json" } });
+            }
+          } catch {
+            upstream = new Response(peek, { status: 404, headers: { "content-type": "application/json" } });
+          }
+        } else {
+          upstream = new Response(peek, { status: 404, headers: { "content-type": "application/json" } });
+        }
+      }
     } catch {
       return json(
         { error: `تعذر الاتصال بالمزود على ${url} — تأكد من الرابط ومن إعدادات «إضافة /v1 تلقائيًا»` },
@@ -100,7 +138,7 @@ export async function POST(_request: Request, ctx: Ctx) {
       selected: Number(m.selected),
     }));
 
-    return json({ ok: true, fetched: ids.length, added, models });
+    return json({ ok: true, fetched: ids.length, added, models, auto_version_fixed: autoVersionFixed });
   } catch (err) {
     return json({ error: err instanceof Error ? err.message : "خطأ غير معروف" }, 500);
   }

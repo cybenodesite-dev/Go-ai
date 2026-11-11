@@ -68,6 +68,43 @@ export const GEO_BLOCK_HINT =
   "المزود يحجب منطقة خروج السيرفر الحالية — المفتاح سليم لكن الطلبات مرفوضة من هذه المنطقة. الحل: انشر البوابة على Vercel بمنطقة مدعومة (مثل الولايات المتحدة)";
 
 /**
+ * Detects MODEL-scoped rejections: the upstream refuses THIS model, not the key
+ * (e.g. "model requires a subscription", "model access denied", "no available
+ * channel for model X"). The key itself is healthy and must NOT be marked
+ * exhausted/disabled — otherwise one restricted model kills every other model
+ * served by the same key.
+ */
+export function isModelScopedFailure(status: number, body: string): boolean {
+  const msg = (extractUpstreamMessage(body) || "").toLowerCase();
+  if (!msg) return false;
+  if (/no available channel.*model|model.*(not|isn't|un)?.?available|model.*(requires|only.*with|needs).*(subscription|upgrade|plan)/.test(msg)) {
+    return true;
+  }
+  if (/user_model_access_denied|not_found_error|model_not_found|does not exist|invalid model|unknown model|decommissioned/.test(msg)) {
+    return true;
+  }
+  if (status === 402 && /subscription|upgrade|plan|model/.test(msg)) return true;
+  if (status === 403 && /model/.test(msg) && /access|denied|available|subscription|allowed/.test(msg)) return true;
+  return false;
+}
+
+/**
+ * Detects a path-style 404: the upstream router says the URL PATH does not
+ * exist ("Cannot POST /v1/v1/chat/completions") — as opposed to a JSON
+ * model-not-found error. Used to self-heal the /v1 auto-append setting.
+ */
+export function looksLikePathNotFound(status: number, body: string): boolean {
+  if (status !== 404) return false;
+  const b = (body || "").slice(0, 2000);
+  if (/cannot\s+(get|post|put|delete|patch)/i.test(b)) return true;
+  if (/\/v1\/v1\//.test(b)) return true;
+  const msg = (extractUpstreamMessage(b) || "").toLowerCase();
+  if (/model|subscription|channel|access/.test(msg)) return false; // model-scoped, not path
+  if (/not\s*found/.test(msg) && msg.length < 80) return true;
+  return false;
+}
+
+/**
  * Classifies an upstream failure into a key status:
  * - 401                                  -> key invalid        -> "disabled"
  * - 402/429                              -> quota/rate limit   -> "exhausted"

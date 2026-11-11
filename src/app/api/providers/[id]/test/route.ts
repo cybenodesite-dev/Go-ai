@@ -4,6 +4,7 @@ import {
   GEO_BLOCK_HINT,
   isGeoBlock,
   json,
+  looksLikePathNotFound,
   upstreamUrl,
 } from "@/lib/gateway";
 
@@ -51,7 +52,39 @@ export async function POST(_request: Request, ctx: Ctx) {
       return json({ error: "أضف مفتاح API واحد على الأقل أولًا" }, 400);
     }
 
-    const modelsUrl = upstreamUrl(baseUrl, "/models", autoVersion);
+    // Probe the path style once with the first key; self-heal /v1 setting if needed.
+    let effectiveAuto = autoVersion;
+    let autoVersionFixed: boolean | null = null;
+    {
+      const probeKey = String(kRes.rows[0].key_value);
+      try {
+        const probe = await fetch(upstreamUrl(baseUrl, "/models", effectiveAuto), {
+          headers: { Authorization: `Bearer ${probeKey}`, Accept: "application/json" },
+          signal: AbortSignal.timeout(15000),
+        });
+        if (probe.status === 404) {
+          const peek = await probe.text().catch(() => "");
+          if (looksLikePathNotFound(404, peek)) {
+            const alt = await fetch(upstreamUrl(baseUrl, "/models", !effectiveAuto), {
+              headers: { Authorization: `Bearer ${probeKey}`, Accept: "application/json" },
+              signal: AbortSignal.timeout(15000),
+            });
+            if (alt.ok) {
+              effectiveAuto = !effectiveAuto;
+              autoVersionFixed = effectiveAuto;
+              await client.execute({
+                sql: "UPDATE providers SET auto_version = ? WHERE id = ?",
+                args: [effectiveAuto ? 1 : 0, id],
+              });
+            }
+          }
+        }
+      } catch {
+        /* per-key checks below will report the network error */
+      }
+    }
+
+    const modelsUrl = upstreamUrl(baseUrl, "/models", effectiveAuto);
     const results: KeyResult[] = [];
     let reactivated = 0;
 
@@ -129,7 +162,7 @@ export async function POST(_request: Request, ctx: Ctx) {
 
     if (mRes.rows.length && ckRes.rows.length) {
       const model = String(mRes.rows[0].model_id);
-      const chatUrl = upstreamUrl(baseUrl, "/chat/completions", autoVersion);
+      const chatUrl = upstreamUrl(baseUrl, "/chat/completions", effectiveAuto);
       const started = Date.now();
       try {
         const up = await fetch(chatUrl, {
@@ -182,6 +215,7 @@ export async function POST(_request: Request, ctx: Ctx) {
       chat,
       reactivated,
       all_geo_blocked: results.length > 0 && results.every((r) => r.geo),
+      auto_version_fixed: autoVersionFixed,
     });
   } catch (err) {
     return json({ error: err instanceof Error ? err.message : "خطأ غير معروف" }, 500);

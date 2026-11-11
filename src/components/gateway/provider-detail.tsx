@@ -190,12 +190,17 @@ export function ProviderDetail({ providerId, onBack }: { providerId: string; onB
     if (!p) return;
     setFetching(true);
     try {
-      const res = await api<{ fetched: number; added: number }>(`/api/providers/${p.id}/fetch-models`, {
-        method: "POST",
-      });
+      const res = await api<{ fetched: number; added: number; auto_version_fixed: boolean | null }>(
+        `/api/providers/${p.id}/fetch-models`,
+        { method: "POST" }
+      );
       toast({
         title: `تم جلب ${res.fetched} موديل`,
-        description: res.added > 0 ? `${res.added} موديل جديد — حدد الموديلات المتاحة من القائمة` : "بدون موديلات جديدة",
+        description: res.auto_version_fixed !== null
+          ? "لاحظنا أن الرابط يعمل بشكل مختلف — ظبطنا إعداد /v1 تلقائيًا"
+          : res.added > 0
+            ? `${res.added} موديل جديد — حدد الموديلات المتاحة من القائمة`
+            : "بدون موديلات جديدة",
       });
       await load();
     } catch (e) {
@@ -648,6 +653,16 @@ export function ProviderDetail({ providerId, onBack }: { providerId: string; onB
             </div>
           ) : (
             <div className="space-y-4">
+              {testResult.auto_version_fixed !== null && (
+                <div className="flex items-start gap-2 rounded-lg border border-teal-200 bg-teal-50 p-3 text-xs leading-5 text-teal-800">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>
+                    لاحظنا أن المسار الصحيح لهذا المزود يكون {testResult.auto_version_fixed ? "مع إضافة" : "بدون"} <span className="code-inline">/v1</span> —
+                    ظبطنا الإعداد تلقائيًا وخزّناه.
+                  </span>
+                </div>
+              )}
+
               {testResult.all_geo_blocked && (
                 <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />

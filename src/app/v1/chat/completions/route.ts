@@ -6,7 +6,9 @@ import {
   extractUpstreamMessage,
   GEO_BLOCK_HINT,
   isGeoBlock,
+  isModelScopedFailure,
   json,
+  looksLikePathNotFound,
   touchGatewayKey,
   upstreamUrl,
 } from "@/lib/gateway";
@@ -32,6 +34,7 @@ type Attempt = {
   detail: string;
   reason: string;
   geo: boolean;
+  model: boolean;
 };
 
 export async function OPTIONS() {
@@ -176,12 +179,46 @@ export async function POST(request: Request) {
       const reason = isAbort
         ? "انتهت مهلة الاتصال بالمزود (120 ثانية)"
         : "تعذر الاتصال بالمزود — خطأ شبكة أو رابط غير صحيح";
-      attempts.push({ provider: cand.provider_name, key: cand.key_label, status: "net", detail, reason, geo: false });
+      attempts.push({ provider: cand.provider_name, key: cand.key_label, status: "net", detail, reason, geo: false, model: false });
       await client.execute({
         sql: "UPDATE api_keys SET error_count = error_count + 1, last_error = ?, last_used_at = datetime('now') WHERE id = ?",
         args: [reason, cand.key_id],
       });
       continue;
+    }
+
+    // Self-heal /v1 path style: if the upstream router says the PATH itself does
+    // not exist ("Cannot POST /v1/v1/chat/completions"), retry once with the
+    // opposite setting and remember what worked for this provider.
+    if (!upstream.ok && upstream.status === 404) {
+      const peek = await upstream.text().catch(() => "");
+      if (looksLikePathNotFound(404, peek)) {
+        const altAuto = cand.auto_version !== 1;
+        let healed = false;
+        try {
+          const alt = await fetch(upstreamUrl(cand.base_url, "/chat/completions", altAuto), {
+            method: "POST",
+            headers: { ...forwardedHeaders, Authorization: `Bearer ${cand.key_value}` },
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(120000),
+          });
+          if (alt.ok) {
+            upstream = alt;
+            healed = true;
+            await client.execute({
+              sql: "UPDATE providers SET auto_version = ? WHERE id = ?",
+              args: [altAuto ? 1 : 0, cand.provider_id],
+            });
+          }
+        } catch {
+          /* keep the original 404 */
+        }
+        if (!healed) {
+          upstream = new Response(peek, { status: 404, headers: { "content-type": "application/json" } });
+        }
+      } else {
+        upstream = new Response(peek, { status: 404, headers: { "content-type": "application/json" } });
+      }
     }
 
     if (upstream.ok) {
@@ -234,13 +271,16 @@ export async function POST(request: Request) {
     }
 
     // Failure — classify the key and move on to the next candidate.
+    // Model-scoped rejections (subscription/availability of THIS model) must NOT
+    // punish the key: the key is healthy and serves the provider's other models.
     const status = upstream.status;
     const text = (await upstream.text().catch(() => "")).slice(0, 2000);
     const reason = extractUpstreamMessage(text) || "(رد المزود بدون تفاصيل)";
     const geo = isGeoBlock(status, text);
-    const newStatus = classifyFailure(status, text);
+    const modelScoped = isModelScopedFailure(status, text);
+    const newStatus = modelScoped ? "active" : classifyFailure(status, text);
     const detail = `HTTP ${status}: ${reason}`;
-    attempts.push({ provider: cand.provider_name, key: cand.key_label, status, detail, reason, geo });
+    attempts.push({ provider: cand.provider_name, key: cand.key_label, status, detail, reason, geo, model: modelScoped });
     await client.execute({
       sql: "UPDATE api_keys SET error_count = error_count + 1, last_error = ?, last_used_at = datetime('now'), status = ? WHERE id = ?",
       args: [detail.slice(0, 500), newStatus, cand.key_id],
@@ -274,20 +314,31 @@ export async function POST(request: Request) {
   // (most clients only display error.message, so the reason must live inside it).
   const geoCount = attempts.filter((a) => a.geo).length;
   const allGeo = attempts.length > 0 && geoCount === attempts.length;
+  const modelCount = attempts.filter((a) => a.model).length;
+  const allModel = attempts.length > 0 && modelCount === attempts.length;
   const last = attempts[attempts.length - 1];
   const lastReason = last
     ? `[${last.provider}${last.key ? ` / ${last.key}` : ""}] ${last.status === "net" ? "خطأ شبكة" : `HTTP ${last.status}`} — ${last.reason.slice(0, 180)}`
     : "لا توجد تفاصيل";
 
-  const message = allGeo
-    ? `فشل الطلب على كل المفاتيح (${attempts.length}) — ${GEO_BLOCK_HINT}. آخر رد: ${lastReason}`
-    : `فشل الطلب على كل المفاتيح المتاحة (${attempts.length} محاولة — تم تجربة التدوير التلقائي). السبب الأخير: ${lastReason}`;
+  let message: string;
+  let errType: string;
+  if (allGeo) {
+    message = `فشل الطلب على كل المفاتيح (${attempts.length}) — ${GEO_BLOCK_HINT}. آخر رد: ${lastReason}`;
+    errType = "geo_blocked";
+  } else if (allModel) {
+    message = `الموديل "${model}" غير متاح فعليًا عند المزود — المفاتيح سليمة وغير متأثرة. السبب: ${lastReason}`;
+    errType = "model_unavailable";
+  } else {
+    message = `فشل الطلب على كل المفاتيح المتاحة (${attempts.length} محاولة — تم تجربة التدوير التلقائي). السبب الأخير: ${lastReason}`;
+    errType = "all_keys_failed";
+  }
 
   return json(
     {
       error: {
         message,
-        type: allGeo ? "geo_blocked" : "all_keys_failed",
+        type: errType,
         attempts,
       },
     },

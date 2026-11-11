@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Plus,
   Globe,
@@ -48,8 +48,16 @@ export function ProvidersView({ onOpenProvider }: { onOpenProvider: (id: string)
   const [addOpen, setAddOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<Provider | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Provider | null>(null);
-  const [form, setForm] = useState({ name: "", base_url: "" });
+  const [form, setForm] = useState({ name: "", base_url: "", auto_version: true });
   const [saving, setSaving] = useState(false);
+
+  const urlPreview = useMemo(() => {
+    const b = form.base_url.trim().replace(/\/+$/, "");
+    if (!b) return "";
+    const withProto = /^https?:\/\//i.test(b) ? b : `https://${b}`;
+    const hasV = /(\/v\d+(beta|preview)?)(\/)?$/i.test(withProto);
+    return `${withProto}${!hasV && form.auto_version ? "/v1" : ""}`;
+  }, [form.base_url, form.auto_version]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -76,7 +84,7 @@ export function ProvidersView({ onOpenProvider }: { onOpenProvider: (id: string)
       });
       toast({ title: "تم إنشاء المزود", description: "افتح صفحته لأضف المفاتيح وتجلب الموديلات" });
       setAddOpen(false);
-      setForm({ name: "", base_url: "" });
+      setForm({ name: "", base_url: "", auto_version: true });
       onOpenProvider(created.id);
     } catch (e) {
       toastError(e, "تعذر إنشاء المزود");
@@ -91,7 +99,11 @@ export function ProvidersView({ onOpenProvider }: { onOpenProvider: (id: string)
     try {
       await api(`/api/providers/${editTarget.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ name: editTarget.name, base_url: editTarget.base_url }),
+        body: JSON.stringify({
+          name: editTarget.name,
+          base_url: editTarget.base_url,
+          auto_version: editTarget.auto_version === 1,
+        }),
       });
       toast({ title: "تم حفظ التعديلات" });
       setEditTarget(null);
@@ -213,7 +225,7 @@ export function ProvidersView({ onOpenProvider }: { onOpenProvider: (id: string)
                     aria-label="تعديل"
                     onClick={() => {
                       setEditTarget(p);
-                      setForm({ name: p.name, base_url: p.base_url });
+                      setForm({ name: p.name, base_url: p.base_url, auto_version: p.auto_version === 1 });
                     }}
                   >
                     <Pencil className="h-3.5 w-3.5" />
@@ -261,8 +273,25 @@ export function ProvidersView({ onOpenProvider }: { onOpenProvider: (id: string)
                 value={form.base_url}
                 onChange={(e) => setForm((f) => ({ ...f, base_url: e.target.value }))}
               />
-              <p className="text-xs text-muted-foreground">يُكمل /v1 تلقائيًا لو مش موجودة</p>
             </div>
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-stone-200 bg-stone-50/60 p-3">
+              <div className="space-y-0.5">
+                <Label htmlFor="p-auto" className="text-sm font-semibold">إضافة /v1 تلقائيًا</Label>
+                <p className="text-xs leading-4 text-muted-foreground">
+                  شغّالها لأغلب المزودين — عطّلها لو الرابط بروكسي بيضيف /v1 بنفسه
+                </p>
+              </div>
+              <Switch
+                id="p-auto"
+                checked={form.auto_version}
+                onCheckedChange={(v) => setForm((f) => ({ ...f, auto_version: v }))}
+              />
+            </div>
+            {urlPreview && (
+              <p className="text-xs text-muted-foreground">
+                المسار النهائي: <span className="code-inline" dir="ltr">{urlPreview}/chat/completions</span>
+              </p>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAddOpen(false)}>إلغاء</Button>
@@ -300,6 +329,17 @@ export function ProvidersView({ onOpenProvider }: { onOpenProvider: (id: string)
                 className="code-inline text-left"
                 value={editTarget?.base_url ?? ""}
                 onChange={(e) => setEditTarget((t) => (t ? { ...t, base_url: e.target.value } : t))}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-stone-200 bg-stone-50/60 p-3">
+              <div className="space-y-0.5">
+                <Label htmlFor="e-auto" className="text-sm font-semibold">إضافة /v1 تلقائيًا</Label>
+                <p className="text-xs leading-4 text-muted-foreground">عطّلها لو البروكسي بيضيف /v1 بنفسه</p>
+              </div>
+              <Switch
+                id="e-auto"
+                checked={editTarget?.auto_version === 1}
+                onCheckedChange={(v) => setEditTarget((t) => (t ? { ...t, auto_version: v ? 1 : 0 } : t))}
               />
             </div>
           </div>
