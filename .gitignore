@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# Environment variables (NEVER commit real secrets)
+.env
+.env.*
+!.env.example
+
+# Logs
+dev.log
+server.log
+npm-debug.log*
+
+# Local database (Prisma dev file, unused by the app)
+db/
+
+# Sandbox / tooling artifacts
+.zscripts/
+.vercel
+agent-ctx/
+download/
+tests/
+examples/
+skills/
+Caddyfile
+
+# OS
+.DS_Store

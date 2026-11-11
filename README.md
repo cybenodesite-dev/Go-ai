@@ -1,0 +1,102 @@
+# بوابة مزودي الذكاء الاصطناعي — AI Service Provider Gateway
+
+أداة لإدارة مزودي الذكاء الاصطناعي (OpenAI، OpenRouter، DeepSeek، Gemini وأي خدمة متوافقة مع OpenAI) بمفاتيح API متعددة، مع **رابط بيز موحّد** يوزع الطلبات تلقائيًا ويتدور بين المفاتيح عند الخطأ أو النفاد.
+
+## المزايا
+
+- **إدارة المزودين**: أضف مزودًا بالاسم ورابط البيز، وكل مزود له صفحة خاصة
+- **مفاتيح API غير محدودة**: تلصق مفتاحًا أو عشرات المفاتيح دفعة واحدة (سطر لكل مفتاح)
+- **جلب الموديلات**: زرار واحد يجلب قائمة الموديلات من المزود، وتحدد منها المتاح فقط
+- **جيت واي موحّد متوافق مع OpenAI**:
+  - `GET /v1/models` — يعرض الموديلات المحددة فقط
+  - `POST /v1/chat/completions` — يدعم البث (streaming) وغيره
+- **تدوير تلقائي (Failover)**:
+  - مفتاح يرد `429/402` → يوسم «منتهي» وينتقل الطلب للمفتاح التالي فورًا
+  - مفتاح يرد `401/403` → يوسم «معطل» وينتقل للتالي
+  - يوزع الحمل على أقل المفاتيح استخدامًا، وإن فشل مزود بالكامل ينتقل لمزود آخر يقدم نفس الموديل
+- **عدّاد استخدام** لكل مفتاح + سجلات مفصلة لكل طلب (المزود، المفتاح، زمن الاستجابة، محاولات التدوير)
+- **لوحة عربية RTL** فاتحة ومريحة مع إحصائيات حية
+
+## التقنيات
+
+Next.js 16 (App Router) · TypeScript · Tailwind CSS 4 · shadcn/ui · Turso (libSQL)
+
+## التشغيل محليًا
+
+```bash
+# 1) انسخ ملف البيئة وضع بيانات قاعدة Turso
+cp .env.example .env
+
+# 2) ثبّت الحزم وشغّل
+bun install
+bun run dev
+```
+
+الجداول تُنشأ تلقائيًا في قاعدة Turso عند أول تشغيل — لا حاجة لأي إعداد يدوي.
+
+## النشر على Vercel
+
+1. ارفع المشروع على GitHub (المستودع الحالي جاهز).
+2. ادخل [vercel.com/new](https://vercel.com/new) واختر المستودع.
+3. في خطوة **Environment Variables** أضف المتغيرين (من لوحة Turso → Database → connect):
+
+   | الاسم | القيمة |
+   |---|---|
+   | `TURSO_DATABASE_URL` | `libsql://mozaa-xxxx.turso.io` |
+   | `TURSO_AUTH_TOKEN` | توكين قاعدة البيانات |
+
+4. اضغط **Deploy** — بعد النشر افتح الرابط وستجد مفتاح جيت واي افتراضي جاهزًا.
+
+> ملاحظة: ملف `.env` غير مرفوع على GitHub (محظور في `.gitignore`) — بيانات Turso تُدخل في إعدادات Vercel فقط.
+
+## استخدام الجيت واي من تطبيقك
+
+بعد النشر، رابط البيز الموحد يكون:
+
+```
+https://YOUR-PROJECT.vercel.app/v1
+```
+
+مثال Python:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://YOUR-PROJECT.vercel.app/v1",
+    api_key="gw-xxxx",   # مفتاح من تبويب «الجيت واي» داخل الأداة
+)
+
+models = client.models.list()          # الموديلات المحددة فقط
+resp = client.chat.completions.create( # مع تدوير تلقائي للمفاتيح
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "مرحبا"}],
+)
+print(resp.choices[0].message.content)
+```
+
+مثال cURL:
+
+```bash
+curl https://YOUR-PROJECT.vercel.app/v1/chat/completions \
+  -H "Authorization: Bearer gw-xxxx" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "مرحبا"}]}'
+```
+
+## بنية المشروع
+
+```
+src/
+├── app/
+│   ├── page.tsx                    # الواجهة (لوحة + مزودون + جيت واي + سجلات)
+│   ├── api/                        # APIs الإدارة (providers/keys/models/logs/stats)
+│   └── v1/                         # نقاط الجيت واي المتوافقة مع OpenAI
+│       ├── models/route.ts
+│       └── chat/completions/route.ts   # محرك التدوير التلقائي
+├── components/gateway/             # مكونات الواجهة
+└── lib/
+    ├── turso.ts                    # عميل Turso + إنشاء الجداول
+    ├── gateway.ts                  # المصادقة + تصنيف الأخطاء + CORS
+    └── types.ts
+```
